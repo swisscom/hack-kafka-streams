@@ -2,8 +2,8 @@
 
 ## Description
 
-* Consumes log lines
-* Dispatches log lines to topics based on mandate
+* Consumes Telegraf metrics
+* Dispatches Telegraf metrics to topics based on mandate (rule is demo only)
 
 ## Team
 

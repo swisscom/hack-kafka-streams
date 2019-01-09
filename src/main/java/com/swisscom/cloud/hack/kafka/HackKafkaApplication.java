@@ -6,6 +6,7 @@ package com.swisscom.cloud.hack.kafka;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;
@@ -14,6 +15,9 @@ import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.kstream.Produced;
+import org.apache.kafka.streams.processor.RecordContext;
+import org.apache.kafka.streams.processor.TimestampExtractor;
+import org.apache.kafka.streams.processor.TopicNameExtractor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -32,15 +36,17 @@ public class HackKafkaApplication {
 	}
 
 	@Bean
-	public StreamsBuilder streamsBuilder() {
+	public StreamsBuilder streamsBuilder( //
+			TimestampExtractor telegrafMetricTimestampExtractor, //
+			TopicNameExtractor<String, String> customerTopicNameExtractor) {
 
 		StreamsBuilder builder = new StreamsBuilder();
 
 		KStream<String, String> logStream = builder //
-				.stream("telegraf", Consumed.with(Serdes.String(), Serdes.String()));
+				.stream("telegraf", Consumed.with(Serdes.String(), Serdes.String(), telegrafMetricTimestampExtractor, null));
 
 		logStream.filter((k, v) -> true) //
-				.to("nicolas", Produced.with(Serdes.String(), Serdes.String()));
+				.to(customerTopicNameExtractor, Produced.with(Serdes.String(), Serdes.String()));
 
 		return builder;
 	}
@@ -118,15 +124,59 @@ public class HackKafkaApplication {
 	}
 
 	@Bean
+	public TimestampExtractor telegrafMetricTimestampExtractor() {
+
+		return new TimestampExtractor() {
+
+			@Override
+			public long extract(ConsumerRecord<Object, Object> record, long previousTimestamp) {
+
+				final long timestamp = record.timestamp();
+				long result;
+
+				if (timestamp < 0) {
+					String value = record.value().toString().trim();
+					String[] split = value.split(" ");
+					String epoch = split[split.length - 1];
+					result = Long.parseLong(epoch);
+				} else {
+					result = timestamp;
+				}
+
+				return result;
+			}
+		};
+	}
+
+	@Bean
+	public TopicNameExtractor<String, String> customerTopicNameExtractor() {
+
+		return new TopicNameExtractor<String, String>() {
+
+			@Override
+			public String extract(String key, String value, RecordContext recordContext) {
+				String[] split = value.split(",");
+				String topic = "metric-" + split[0];
+				return topic;
+			}
+		};
+	}
+
+	@Bean
 	public Properties streamsConfig( //
 			@Value("${kafka.bootstrap-servers}") String bootstrapServers, //
 			@Value("${kafka.state-dir}") String statedir) {
 
 		Properties p = new Properties();
 		p.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
-		p.put(StreamsConfig.APPLICATION_ID_CONFIG, "log-dispatcher");
+		p.put(StreamsConfig.APPLICATION_ID_CONFIG, "metrics-dispatcher");
 		p.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, "exactly_once");
 		p.put(StreamsConfig.STATE_DIR_CONFIG, statedir);
+
+		p.put(StreamsConfig.REPLICATION_FACTOR_CONFIG, 3);
+		p.put("default.replication.factor", 3);
+
 		return p;
 	}
+
 }
